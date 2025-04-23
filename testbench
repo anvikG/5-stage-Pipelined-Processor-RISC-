@@ -1,0 +1,15 @@
+module core_tb ();
+reg clk_i = 1;
+reg rst_ni = 1;
+core core_m (
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+always
+#5 clk_i = ~clk_i;
+initial begin
+rst_ni = 0;
+#7 rst_ni = 1;
+#95 $finish;
+end
+endmodule
