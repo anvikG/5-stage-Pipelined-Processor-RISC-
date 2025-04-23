@@ -1,0 +1,668 @@
+`timescale 1ns / 1ps
+module alu (
+input [31:0]data_a_i,
+input [31:0]data_b_i,
+output reg [31:0]alu_res_o,
+input [1:0]alu_c_i
+);
+wire [31:0]alu_res_sum;
+wire alu_res_over;
+// adder_32 adder_32_m (
+// .a_i(data_a_i),
+// .b_i(data_b_i),
+// .s_o(alu_res_sum),
+// .c_o(alu_res_over)
+// );
+always @(*) begin
+case (alu_c_i)
+2'b00: alu_res_o = data_a_i & data_b_i;
+2'b01: alu_res_o = data_a_i | data_b_i;
+2'b10: alu_res_o = ~(data_a_i | data_b_i);
+2'b11: alu_res_o = data_a_i + data_b_i;
+default: alu_res_o = 32'b0;
+endcase
+end
+endmodule
+module control (
+input [3:0]opcode_i,
+input stall_control_c_i,
+output reg alu_src_c_o,
+output reg mem_to_reg_c_o,
+output reg reg_write_c_o,
+output reg mem_read_c_o,
+output reg mem_write_c_o,
+output reg [1:0]alu_op_c_o
+);
+always @(*) begin
+if (stall_control_c_i == 1) begin
+alu_src_c_o = 0;
+mem_to_reg_c_o = 0;
+reg_write_c_o = 0;
+mem_read_c_o = 0;
+mem_write_c_o = 0;
+alu_op_c_o = 2'b00;
+end
+else begin
+case(opcode_i)
+//SW
+4'b0000: begin
+alu_src_c_o = 1;
+mem_to_reg_c_o = 1;
+reg_write_c_o = 0;
+mem_read_c_o = 0;
+mem_write_c_o = 1;
+alu_op_c_o = 2'b11;
+end
+//AND
+4'b0001: begin
+alu_src_c_o = 0;
+mem_to_reg_c_o = 0;
+reg_write_c_o = 1;
+mem_read_c_o = 0;
+mem_write_c_o = 0;
+alu_op_c_o = 2'b00;
+end
+//NOR
+4'b0011: begin
+alu_src_c_o = 0;
+mem_to_reg_c_o = 0;
+reg_write_c_o = 1;
+mem_read_c_o = 0;
+mem_write_c_o = 0;
+alu_op_c_o = 2'b10;
+end
+//ORI
+4'b0111: begin
+alu_src_c_o = 1;
+mem_to_reg_c_o = 0;
+reg_write_c_o = 1;
+mem_read_c_o = 0;
+mem_write_c_o = 0;
+alu_op_c_o = 2'b01;
+end
+//ADD
+4'b1111: begin
+alu_src_c_o = 0;
+mem_to_reg_c_o = 0;
+reg_write_c_o = 1;
+mem_read_c_o = 0;
+mem_write_c_o = 0;
+alu_op_c_o = 2'b11;
+end
+default: begin
+alu_src_c_o = 0;
+mem_to_reg_c_o = 0;
+reg_write_c_o = 0;
+mem_read_c_o = 0;
+mem_write_c_o = 0;
+alu_op_c_o = 2'b00;
+end
+endcase
+end
+end
+endmodule
+module core (
+input clk_i,
+input rst_ni
+);
+reg flush = 0;
+reg stall = 0;
+wire stall_if_id;
+wire [31:0]pipe_if_id_i;
+wire [31:0]pipe_if_id_o;
+pipe_registers #(.PIPE_SIZE(32)) pipe_if_id_m (
+.pipe_i(pipe_if_id_i),
+.pipe_o(pipe_if_id_o),
+.flush_c_i(flush),
+.stall_c_i(stall_if_id),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+//31:00 - instr
+wire [115:0]pipe_id_ex_i;
+wire [115:0]pipe_id_ex_o;
+pipe_registers #(.PIPE_SIZE(115)) pipe_id_ex_m (
+.pipe_i(pipe_id_ex_i),
+.pipe_o(pipe_id_ex_o),
+.flush_c_i(flush),
+.stall_c_i(stall),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+//114:83 - data_1
+//82:51 - data_2
+//50:47 - rn1
+//46:43 - rn2
+//42:11 - imm
+//10:7 - wn
+//6 - alu_src_c
+//5 - mem_to_reg_c
+//4 - reg_write_c
+//3 - mem_read_c
+//2 - mem_write_c
+//1:0 - alu_op_c
+wire [71:0]pipe_ex_mem_i;
+wire [71:0]pipe_ex_mem_o;
+pipe_registers #(.PIPE_SIZE(72)) pipe_ex_mem_m (
+.pipe_i(pipe_ex_mem_i),
+.pipe_o(pipe_ex_mem_o),
+.flush_c_i(flush),
+.stall_c_i(stall),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+//71:40 - alu_res
+//39:8 - data_w
+//7:4 - addr_w
+//3 - mem_to_reg_c
+//2 - reg_write_c
+//1 - mem_read_c
+//0 - mem_write_c
+wire [69:0]pipe_mem_wb_i;
+wire [69:0]pipe_mem_wb_o;
+pipe_registers #(.PIPE_SIZE(70)) pipe_mem_wb_m (
+.pipe_i(pipe_mem_wb_i),
+.pipe_o(pipe_mem_wb_o),
+.flush_c_i(flush),
+.stall_c_i(stall),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+//69:38 - data_w_1
+//37:6 - data_w_2
+//5:2 - addr_w
+//1 - mem_to_reg_c
+//0 - reg_write_c
+wire [3:0]addr_w;
+wire [31:0]data_w;
+wire reg_write_c;
+wire [1:0]fa_c;
+wire [1:0]fb_c;
+reg [3:0]id_ex_addr_rs_reg;
+reg [3:0]id_ex_addr_rt_reg;
+wire [3:0]addr_rn1_id;
+wire [3:0]addr_rn2_id;
+wire pc_write_c;
+wire stall_control_c;
+forward forward_m (
+.ex_mem_reg_write_c(pipe_ex_mem_o[2]),
+.mem_wb_reg_write_c(pipe_mem_wb_o[0]),
+.ex_mem_addr_rd(pipe_ex_mem_o[7:4]),
+.mem_wb_addr_rd(pipe_mem_wb_o[5:2]),
+.id_ex_addr_rs(pipe_id_ex_o[50:47]),
+.id_ex_addr_rt(pipe_id_ex_o[46:43]),
+.fa_c(fa_c),
+.fb_c(fb_c)
+);
+hazard_detect hazard_detect_m (
+.mem_read_ex_c_i(pipe_id_ex_o[3]),
+.addr_wn_ex_i(pipe_id_ex_o[10:7]),
+.addr_rn1_id_i(pipe_id_ex_i[50:47]),
+.addr_rn2_id_i(pipe_id_ex_i[46:43]),
+.stall_if_id_c_o(stall_if_id),
+.pc_write_c_o(pc_write_c),
+.stall_control_c_o(stall_control_c)
+);
+if_stage if_stage_m (
+.instr_o(pipe_if_id_i[31:0]),
+.pc_write_c_i(pc_write_c),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+id_stage id_stage_m (
+.instr_i(pipe_if_id_o[31:0]),
+.addr_w_i(addr_w),
+.data_w_i(data_w),
+.data_rn1_o(pipe_id_ex_i[114:83]),
+.data_rn2_o(pipe_id_ex_i[82:51]),
+.imm_o(pipe_id_ex_i[42:11]),
+.addr_wn_o(pipe_id_ex_i[10:7]),
+.addr_rn1_o(pipe_id_ex_i[50:47]),
+.addr_rn2_o(pipe_id_ex_i[46:43]),
+.reg_write_c_i(reg_write_c),
+.stall_control_c_i(stall_control_c),
+.alu_src_c_o(pipe_id_ex_i[6]),
+.mem_to_reg_c_o(pipe_id_ex_i[5]),
+.reg_write_c_o(pipe_id_ex_i[4]),
+.mem_read_c_o(pipe_id_ex_i[3]),
+.mem_write_c_o(pipe_id_ex_i[2]),
+.alu_op_c_o(pipe_id_ex_i[1:0]),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+ex_stage ex_stage_m (
+.data_rn1_i(pipe_id_ex_o[114:83]),
+.data_rn2_i(pipe_id_ex_o[82:51]),
+.imm_i(pipe_id_ex_o[42:11]),
+.addr_wn_i(pipe_id_ex_o[10:7]),
+.data_rn_mem_i(pipe_ex_mem_o[71:40]),
+.data_rn_wb_i(data_w),
+.alu_res_o(pipe_ex_mem_i[71:40]),
+.data_o(pipe_ex_mem_i[39:8]),
+.addr_w_o(pipe_ex_mem_i[7:4]),
+.alu_src_c_i(pipe_id_ex_o[6]),
+.mem_to_reg_c_i(pipe_id_ex_o[5]),
+.reg_write_c_i(pipe_id_ex_o[4]),
+.mem_read_c_i(pipe_id_ex_o[3]),
+.mem_write_c_i(pipe_id_ex_o[2]),
+.alu_op_c_i(pipe_id_ex_o[1:0]),
+.forward_a_c_i(fa_c),
+.forward_b_c_i(fb_c),
+.mem_to_reg_c_o(pipe_ex_mem_i[3]),
+.reg_write_c_o(pipe_ex_mem_i[2]),
+.mem_read_c_o(pipe_ex_mem_i[1]),
+.mem_write_c_o(pipe_ex_mem_i[0])
+);
+mem_stage mem_stage_m (
+.alu_res_i(pipe_ex_mem_o[71:40]),
+.data_i(pipe_ex_mem_o[39:8]),
+.addr_w_i(pipe_ex_mem_o[7:4]),
+.data_w_1_o(pipe_mem_wb_i[69:38]),
+.data_w_2_o(pipe_mem_wb_i[37:6]),
+.addr_w_o(pipe_mem_wb_i[5:2]),
+.mem_to_reg_c_i(pipe_ex_mem_o[3]),
+.reg_write_c_i(pipe_ex_mem_o[2]),
+.mem_read_c_i(pipe_ex_mem_o[1]),
+.mem_write_c_i(pipe_ex_mem_o[0]),
+.mem_to_reg_c_o(pipe_mem_wb_i[1]),
+.reg_write_c_o(pipe_mem_wb_i[0]),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+wb_stage wb_stage_m (
+.data_w_1_i(pipe_mem_wb_o[69:38]),
+.data_w_2_i(pipe_mem_wb_o[37:6]),
+.addr_w_i(pipe_mem_wb_o[5:2]),
+.data_w_o(data_w),
+.addr_w_o(addr_w),
+.mem_to_reg_c_i(pipe_mem_wb_o[1]),
+.reg_write_c_i(pipe_mem_wb_o[0]),
+.reg_write_c_o(reg_write_c)
+);
+endmodule
+module data_mem #(
+parameter DM_SIZE = 64
+) (
+input [31:0]addr_i,
+output reg [31:0]data_o,
+input [31:0]data_i,
+input mem_read_c_i,
+input mem_write_c_i,
+input clk_i,
+input rst_ni
+);
+reg [7:0]mem_t[0:DM_SIZE-1];
+integer i;
+always @(*) begin
+if (mem_read_c_i == 1) begin
+for (i = 0; i < 4; i = i + 1)
+data_o[i*8 +: 8] = mem_t[addr_i + i];
+end
+else begin
+for (i = 0; i < 4; i = i + 1)
+data_o[i*8 +: 8] = 8'b0;
+end
+end
+always @(posedge clk_i or negedge rst_ni) begin
+if (rst_ni == 0) begin
+for (i = 0; i < DM_SIZE; i = i + 1)
+mem_t[i] <= 8'b0;
+end
+else begin
+if (mem_write_c_i == 1) begin
+for (i = 0; i < 4; i = i + 1)
+mem_t[addr_i + i] <= data_i[i*8 +: 8];
+end
+end
+end
+endmodule
+module ex_stage (
+input [31:0]data_rn1_i,
+input [31:0]data_rn2_i,
+input [31:0]imm_i,
+input [3:0]addr_wn_i,
+input [31:0]data_rn_mem_i,
+input [31:0]data_rn_wb_i,
+output [31:0]alu_res_o,
+output reg [31:0]data_o,
+output reg [3:0]addr_w_o,
+input alu_src_c_i,
+input mem_to_reg_c_i,
+input reg_write_c_i,
+input mem_read_c_i,
+input mem_write_c_i,
+input [1:0]alu_op_c_i,
+input [1:0]forward_a_c_i,
+input [1:0]forward_b_c_i,
+output reg mem_to_reg_c_o,
+output reg reg_write_c_o,
+output reg mem_read_c_o,
+output reg mem_write_c_o
+);
+reg [31:0]data_a_i;
+reg [31:0]data_b_i;
+reg [31:0]alu_res_o_t;
+reg [31:0]alu_res_o_tt;
+always @(*) begin
+case(forward_a_c_i)
+2'b00: data_a_i = data_rn1_i;
+2'b01: data_a_i = data_rn_wb_i;
+2'b10: data_a_i = data_rn_mem_i;
+endcase
+if (alu_src_c_i == 1)
+data_b_i = imm_i;
+else begin
+case(forward_b_c_i)
+2'b00: data_b_i = data_rn2_i;
+2'b01: data_b_i = data_rn_wb_i;
+2'b10: data_b_i = data_rn_mem_i;
+endcase
+end
+end
+alu alu_m (
+.data_a_i(data_a_i),
+.data_b_i(data_b_i),
+.alu_res_o(alu_res_o),
+.alu_c_i(alu_op_c_i)
+);
+always @(*) begin
+data_o = data_rn2_i;
+addr_w_o = addr_wn_i;
+mem_to_reg_c_o = mem_to_reg_c_i;
+reg_write_c_o = reg_write_c_i;
+mem_read_c_o = mem_read_c_i;
+mem_write_c_o = mem_write_c_i;
+end
+endmodule
+module forward(
+input ex_mem_reg_write_c,
+input mem_wb_reg_write_c,
+input [3:0]ex_mem_addr_rd,
+input [3:0]mem_wb_addr_rd,
+input [3:0]id_ex_addr_rs,
+input [3:0]id_ex_addr_rt,
+output reg [1:0]fa_c,
+output reg [1:0]fb_c
+);
+always @ (*) begin
+if(ex_mem_reg_write_c == 1 && ex_mem_addr_rd !== 4'd0 && ex_mem_addr_rd == id_ex_addr_rs)
+fa_c = 2'b10;
+else if(mem_wb_reg_write_c == 1 && mem_wb_addr_rd !== 4'd0 && mem_wb_addr_rd == id_ex_addr_rs)
+fa_c = 2'b01;
+else
+fa_c = 2'b00;
+if(ex_mem_reg_write_c == 1 && ex_mem_addr_rd !== 4'd0 && ex_mem_addr_rd == id_ex_addr_rt)
+fb_c = 2'b10;
+else if(mem_wb_reg_write_c == 1 && mem_wb_addr_rd !== 4'd0 && mem_wb_addr_rd == id_ex_addr_rt)
+fb_c = 2'b01;
+else
+fb_c = 2'b00;
+end
+endmodule
+module hazard_detect (
+input mem_read_ex_c_i,
+input [3:0]addr_wn_ex_i,
+input [3:0]addr_rn1_id_i,
+input [3:0]addr_rn2_id_i,
+output reg stall_if_id_c_o,
+output reg pc_write_c_o,
+output reg stall_control_c_o
+);
+always @(*) begin
+if ((mem_read_ex_c_i == 1) && ((addr_wn_ex_i == addr_rn2_id_i) || (addr_wn_ex_i == addr_rn1_id_i))) begin
+stall_if_id_c_o = 1;
+pc_write_c_o = 0;
+stall_control_c_o = 1;
+end
+else begin
+stall_if_id_c_o = 0;
+pc_write_c_o = 1;
+stall_control_c_o = 0;
+end
+end
+endmodule
+module id_stage (
+input [31:0]instr_i,
+input [3:0]addr_w_i,
+input [31:0]data_w_i,
+output [31:0]data_rn1_o,
+output [31:0]data_rn2_o,
+output reg [31:0]imm_o,
+output reg [3:0]addr_wn_o,
+output reg [3:0]addr_rn1_o,
+output reg [3:0]addr_rn2_o,
+input reg_write_c_i,
+input stall_control_c_i,
+output alu_src_c_o,
+output mem_to_reg_c_o,
+output reg_write_c_o,
+output mem_read_c_o,
+output mem_write_c_o,
+output [1:0]alu_op_c_o,
+input clk_i,
+input rst_ni
+);
+wire [3:0]opcode;
+wire [3:0]addr_wn;
+wire [3:0]addr_rn1;
+wire [3:0]addr_rn2;
+wire [31:0]imm;
+instr_decode instr_decode_m (
+.instr_i(instr_i),
+.opcode_o(opcode),
+.addr_wn_o(addr_wn),
+.addr_rn1_o(addr_rn1),
+.addr_rn2_o(addr_rn2),
+.imm_o(imm[31:16])
+);
+registers registers_m (
+.addr_rn1_i(addr_rn1),
+.addr_rn2_i(addr_rn2),
+.data_rn1_o(data_rn1_o),
+.data_rn2_o(data_rn2_o),
+.addr_w_i(addr_w_i),
+.data_w_i(data_w_i),
+.reg_write_c_i(reg_write_c_i),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+control control_m (
+.opcode_i(opcode),
+.stall_control_c_i(stall_control_c_i),
+.alu_src_c_o(alu_src_c_o),
+.mem_to_reg_c_o(mem_to_reg_c_o),
+.reg_write_c_o(reg_write_c_o),
+.mem_read_c_o(mem_read_c_o),
+.mem_write_c_o(mem_write_c_o),
+.alu_op_c_o(alu_op_c_o)
+);
+always @(*) begin
+addr_wn_o = addr_wn;
+imm_o = imm >>> 16;
+addr_rn1_o = addr_rn1;
+addr_rn2_o = addr_rn2;
+end
+endmodule
+module if_stage (
+input pc_write_c_i,
+output [31:0]instr_o,
+input clk_i,
+input rst_ni
+);
+reg [31:0]pc_t;
+wire [31:0]pc_n;
+instr_mem instr_mem_m (
+.addr_i(pc_t),
+.instr_o(instr_o),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+pc_incr pc_incr_m (
+.pc_i(pc_t),
+.pc_o(pc_n),
+.pc_write_c_i(pc_write_c_i)
+);
+always @(posedge clk_i or negedge rst_ni) begin
+if (rst_ni == 0)
+pc_t <= 32'b0;
+else
+pc_t <= pc_n;
+end
+endmodule
+module instr_decode (
+input [31:0]instr_i,
+output reg [3:0]opcode_o,
+output reg [3:0]addr_wn_o,
+output reg [3:0]addr_rn1_o,
+output reg [3:0]addr_rn2_o,
+output reg [15:0]imm_o
+);
+always @(*) begin
+opcode_o = instr_i[31:28];
+addr_wn_o = instr_i[27:24];
+addr_rn1_o = instr_i[23:20];
+addr_rn2_o = instr_i[19:16];
+imm_o = instr_i[15:0];
+end
+endmodule
+module instr_mem #(
+parameter IM_SIZE = 32,
+parameter IM_ADDR_SIZE = 5
+) (
+input [31:0]addr_i,
+output reg [31:0]instr_o,
+// input [31:0]instr_i,
+// input write_instr_c,
+input clk_i,
+input rst_ni
+);
+integer i;
+reg [7:0]instr_t[0:IM_SIZE - 1];
+//read instruction
+always @(*) begin
+if (addr_i[1:0] == 2'b0) begin
+for (i = 0; i < 4; i = i + 1)
+instr_o[8*i +: 8] = instr_t[addr_i[IM_ADDR_SIZE-1:0] + i];
+end
+else
+$display("instruction misaligned");
+end
+//write instruction
+always @(posedge clk_i or negedge rst_ni) begin
+if (rst_ni == 0) begin
+for (i = 0; i < IM_SIZE; i = i + 1)
+instr_t[i] <= 8'b0;
+{instr_t[3], instr_t[2], instr_t[1], instr_t[0]} <= 32'b0000_0000_0010_0001_0000000000001001;
+{instr_t[7], instr_t[6], instr_t[5], instr_t[4]} <= 32'h1413_0000;
+{instr_t[11], instr_t[10], instr_t[9], instr_t[8]} <= 32'h3654_0000;
+{instr_t[15], instr_t[14], instr_t[13], instr_t[12]} <= 32'h7760_4556;
+{instr_t[19], instr_t[18], instr_t[17], instr_t[16]} <= 32'hF9780000;
+end
+end
+endmodule
+module mem_stage (
+input [31:0]alu_res_i,
+input [31:0]data_i,
+input [3:0]addr_w_i,
+output [31:0]data_w_1_o,
+output reg [31:0]data_w_2_o,
+output reg [3:0]addr_w_o,
+input mem_to_reg_c_i,
+input reg_write_c_i,
+input mem_read_c_i,
+input mem_write_c_i,
+output reg mem_to_reg_c_o,
+output reg reg_write_c_o,
+input clk_i,
+input rst_ni
+);
+data_mem data_mem_m (
+.addr_i(alu_res_i),
+.data_o(data_w_1_o),
+.data_i(data_i),
+.mem_read_c_i(mem_read_c_i),
+.mem_write_c_i(mem_write_c_i),
+.clk_i(clk_i),
+.rst_ni(rst_ni)
+);
+always @(*) begin
+data_w_2_o = alu_res_i;
+addr_w_o = addr_w_i;
+mem_to_reg_c_o = mem_to_reg_c_i;
+reg_write_c_o = reg_write_c_i;
+end
+endmodule
+module pipe_registers #(
+parameter PIPE_SIZE = 64
+) (
+input [PIPE_SIZE-1:0]pipe_i,
+output reg [PIPE_SIZE-1:0]pipe_o,
+input stall_c_i,
+input flush_c_i,
+input clk_i,
+input rst_ni
+);
+reg [PIPE_SIZE-1:0]pipe_t;
+always @(posedge clk_i or negedge rst_ni) begin
+if (rst_ni == 0)
+pipe_t <= {PIPE_SIZE{1'b0}};
+else begin
+if (flush_c_i == 1)
+pipe_t <= {PIPE_SIZE{1'b0}};
+else
+pipe_t <= stall_c_i?pipe_t:pipe_i;
+end
+end
+always @(*) begin
+pipe_o = pipe_t;
+end
+endmodule
+module registers (
+input [3:0]addr_rn1_i,
+input [3:0]addr_rn2_i,
+output reg [31:0]data_rn1_o,
+output reg [31:0]data_rn2_o,
+input [3:0]addr_w_i,
+input [31:0]data_w_i,
+input reg_write_c_i,
+input clk_i,
+input rst_ni
+);
+reg [31:0]reg_t[0:15];
+integer i;
+always @(*) begin
+data_rn1_o = reg_t[addr_rn1_i];
+data_rn2_o = reg_t[addr_rn2_i];
+end
+always @(negedge clk_i or negedge rst_ni) begin
+if (rst_ni == 0) begin
+for (i = 0; i < 16; i = i + 1)
+reg_t[i] <= 32'b0;
+reg_t[1] <= 32'h15045;
+reg_t[2] <= 32'h3;
+reg_t[3] <= 32'h0D421;
+reg_t[8] <= 32'h964DA;
+reg_t[5] <= 32'hBCAE1;
+end
+else if (reg_write_c_i == 1) begin
+if (addr_w_i != 0)
+reg_t[addr_w_i] <= data_w_i;
+end
+end
+endmodule
+module wb_stage (
+input [31:0]data_w_1_i,
+input [31:0]data_w_2_i,
+input [3:0]addr_w_i,
+output reg [31:0]data_w_o,
+output reg [3:0]addr_w_o,
+input mem_to_reg_c_i,
+input reg_write_c_i,
+output reg reg_write_c_o
+);
+always @(*) begin
+data_w_o = mem_to_reg_c_i?data_w_1_i:data_w_2_i;
+reg_write_c_o = reg_write_c_i;
+addr_w_o = addr_w_i;
+end
+endmodule
